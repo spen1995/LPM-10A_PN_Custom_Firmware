@@ -38,6 +38,7 @@ struct S {
     u32 note_end, t_pulse, t_act, next_batt, save_at, t_sig, t_switch;
     u8 autom, hush, locked, swallow;
     u32 lost_at;
+    u16 cur; u8 slew, spare;                         /* speaker swing right now, and how fast it may change per tick */
 };
 #define st ((struct S *)0x20001800)
 
@@ -86,13 +87,28 @@ static void play(struct S *s, const u8 *p, u32 t)
     s->seq = p; s->seq_div = p[0]; s->note_end = t + p[1] * 400u;
 }
 
-static void flipa(struct S *s, u32 a)
+/* one 40 kHz tick of a square wave flipping every n ticks. ph: bit 7 = which half, low bits = ticks into it.
+   A running count, not t % n: when the pitch changes mid-sound the half-wave in progress is finished at the
+   new length instead of being cut short, which was heard as a click on every step of a sweep. */
+static void tone(struct S *s, u32 n, u32 a)
 {
-    s->ph ^= 1;
-    SET_CCR(s->ph & 1 ? 800 + a : 800 - a);
+    u32 c = (s->ph & 0x7F) + 1, h = s->ph & 0x80;
+    u32 cur = s->cur, r = s->slew;
+    /* the swing eases towards `a` rather than jumping: a sound that starts or stops at full swing kicks the
+       speaker cone, which is heard as a pop on every pulse */
+    if (cur < a) { cur += r; if (cur > a) cur = a; }
+    else if (cur > a) { cur = cur > a + r ? cur - r : a; }
+    s->cur = cur;
+    if (c >= n) { c = 0; h ^= 0x80; SET_CCR(h ? 800 + cur : 800 - cur); }
+    s->ph = h | c;
 }
 
-static void flip(struct S *s) { flipa(s, AMP[s->vol]); }
+static void rest(struct S *s, u32 t)
+{
+    s->ph |= 0x7F;                                   /* the next sound starts with a flip at once */
+    s->cur = 0;
+    if (!(t & 7)) SET_CCR(800);
+}
 
 static u32 millivolts(void)
 {
@@ -204,8 +220,13 @@ u32 helper(u32 t)
             if (p[1]) play(s, p, t);
             else { s->seq = 0; s->prevk = 0; KEEP = 0; SET_CCR(800); return END; }
         }
-        if (s->seq_div) { if (t % s->seq_div == 0) flip(s); }
-        else if (!(t & 7)) SET_CCR(800);
+        if (s->seq_div) {
+            const u8 *p = s->seq;
+            u32 last = !p[2] || !p[3];               /* a rest or the end comes next */
+            s->slew = 3;
+            tone(s, s->seq_div, last && (int)(s->note_end - t) < 110 ? 0 : AMP[s->vol]);
+        }
+        else rest(s, t);
         return END;
     }
     u32 k = KEEP, mode = MODE, pk = s->prevk, n, amp = AMP[s->vol];
@@ -225,13 +246,14 @@ u32 helper(u32 t)
             }
         }
     }
-    if (!k) return OLD;                              /* silence: PN1.30 runs its pulse scheduler here */
+    if (!k) { s->cur = 0; s->ph |= 0x7F; return OLD; }   /* silence: PN1.30 runs its pulse scheduler here */
+    s->slew = 3;
     if (mode == 2) n = 4;
     else if (s->start != TRACE) n = ((mode == 1) ^ (k > 50)) ? 16 : 8;   /* key and power beeps as PN1.30 */
     else if (s->lmode == 2 || s->mute) n = 0;
     else if (s->accent) n = 5;                       /* a new strongest reading in peak hold */
     else if (s->theme == 1) n = mode ? 16 : 8;
-    else if (s->theme == 2) n = k >= 28 ? 5 : 0;
+    else if (s->theme == 2) { n = k >= 28 ? 5 : 0; s->slew = 255; }             /* Geiger: meant to click */
     else if (s->theme == 3) { n = 9 + s->off; amp = amp * k / 30; }             /* sonar: one pitch, fading out */
     else if (s->theme == 4) n = 4 + ((30 - k) >> 1) + s->off;                   /* laser: fast falling sweep */
     else if (s->theme == 5) n = 4 + (k >> 1) + s->off;                          /* rise: fast rising sweep */
@@ -239,7 +261,7 @@ u32 helper(u32 t)
     else if (s->theme == 7) n = (k & 2 ? 7 : 10) + s->off;                      /* trill: two pitches swapping every 2 ms */
     else if (s->theme == 8) n = 5 + 2 * s->off;                                 /* metal detector: steady tone, pitch is the strength */
     else if (s->theme == 9) n = s->parity & 1 ? 22 : 28;                        /* heartbeat: two low thumps in turn */
-    else if (s->theme == 10) n = (30 - k) % 10 < 4 ? 5 + s->off : 0;            /* cricket: three short chirps */
+    else if (s->theme == 10) { n = (30 - k) % 10 < 4 ? 5 + s->off : 0; s->slew = 8; }            /* cricket: three short chirps */
     else if (s->theme == 11) n = (s->parity & 1) || k > 20 ? 8 + s->off : 0;    /* telegraph: dot, dash, dot, dash */
     else if (s->theme == 12) n = (k > 20 ? 19 : k > 10 ? 15 : 13) + s->off;     /* arpeggio: three rising notes */
     else if (s->theme == 13) n = (s->parity & 1 ? 7 : 10) + s->off;             /* siren: high and low pulses in turn */
@@ -248,8 +270,11 @@ u32 helper(u32 t)
         n = mode ? (s->parity & 1 ? 25 - v : 10 + v) : (s->parity & 1 ? 16 - v : 6 + v);
         n += s->off;
     }
-    if (!n) { if (!(t & 7)) SET_CCR(800); }
-    else if (t % n == 0) flipa(s, amp);
+    if (!n) rest(s, t);
+    else {
+        if (mode != 2 && s->theme != 2 && k < 4) amp = 0;       /* ease out over the last 3 ms */
+        tone(s, n, amp);
+    }
     return END;
 }
 
