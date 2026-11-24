@@ -79,10 +79,10 @@ field around live AC wiring. **Mains electricity can injure or kill you.**
 
 | Unit | File | Status |
 |---|---|---|
-| Tester | `LPM-10A-TX_PN2.35F-space.bin` | Latest. Emulator-tested; **not yet confirmed on hardware** |
-| Tester | `LPM-10A-TX_PN2.35C-settings.bin` | **Confirmed on hardware.** Has Thai, 5 themes, no Tetris resume |
-| Probe | `APP_LPM-10RX_PN1.30-spence10-update.bin` | Latest. Emulator-tested; **not yet confirmed on hardware** |
-| Probe | `APP_LPM-10RX_PN1.30-spence4-update.bin` | **Confirmed on hardware.** No saved settings, no auto mode |
+| Tester | `LPM-10A-TX_PN2.35F-space.bin` | Latest. **Confirmed on hardware** |
+| Tester | `LPM-10A-TX_PN2.35C-settings.bin` | Older, confirmed on hardware. Has Thai, 5 themes, no Tetris resume |
+| Probe | `APP_LPM-10RX_PN1.30-spence12-update.bin` | Latest. **Confirmed on hardware** |
+| Probe | `APP_LPM-10RX_PN1.30-spence4-update.bin` | Older, confirmed on hardware. No saved settings, no auto mode; pulses pop (see Lessons) |
 
 ---
 
@@ -145,6 +145,9 @@ strength and its own detection fixes (see [README-UPSTREAM.md](README-UPSTREAM.m
   This is on top of upstream's faster-beeps-when-stronger behaviour.
 - **Fourteen sound themes** for the tracing pulses, all original sounds (table below). Most also
   drop in pitch as the signal weakens.
+- **Click-free sound**: every sound fades in and out over about 2.5 ms, and pitch changes never cut
+  a half-wave short. Without this the speaker pops at the start of each pulse. The Geiger theme is
+  left sharp on purpose.
 - **Three volume levels**: full, medium and low. They apply to every sound the probe makes,
   including key beeps and mains mode.
 
@@ -267,7 +270,7 @@ system. **They contain hard-coded paths and will need editing before they run on
 - **Tester**: a chain of binary patch stages on upstream's `PN2.34-cable-session` image:
   `build_tx.py` → `build_diag.py` → `build_theme.py` → `build_cyber.py` → `build_x.py`
   (which runs `build_apps6.py` and `build_v.py` and compiles `tetris.c`).
-- **Probe**: `build_rx10.py` appends the compiled `probe.c` to upstream's `PN1.30` raw image and
+- **Probe**: `build_rx12.py` appends the compiled `probe.c` to upstream's `PN1.30` raw image and
   redirects three call sites.
 - Tools needed: Python 3 with `keystone-engine`, `capstone`, `unicorn` and `Pillow`; `clang` with ARM
   targets, `ld.lld` and `llvm-objcopy`.
@@ -284,6 +287,10 @@ system. **They contain hard-coded paths and will need editing before they run on
 - **On battery, any reset looks like a power loss.** The tester holds its own power on through a
   pin that a reset releases, so RAM, the crash record and any log are wiped. Reproduce crashes with
   USB power connected if you want the evidence to survive.
+- **The emulator cannot hear.** The probe's sounds passed every timing check and still popped on
+  the real speaker. A phone recording showed a low thump in the first few milliseconds of each
+  pulse: a sound that starts at full swing kicks the speaker cone. Fading sounds in and out fixed
+  it. Record the device and look at the waveform when something sounds wrong.
 
 ---
 
@@ -305,10 +312,10 @@ no-warranty and no-liability terms apply in full, in addition to the disclaimer 
 | Unit | Version | File | SHA-256 |
 |---|---|---|---|
 | Tester | PN2.35F | [`LPM-10A-TX_PN2.35F-space.bin`](spentek/firmware/tester/LPM-10A-TX_PN2.35F-space.bin) | `383ea45f380110b32629411cb7727a82e875e7a6735e3888c844cbfb4587c843` |
-| Probe | PN1.30 build 10 | [`APP_LPM-10RX_PN1.30-spence10-update.bin`](spentek/firmware/probe/APP_LPM-10RX_PN1.30-spence10-update.bin) | `de1c7b33be5fd51190f6d094e645d806c7836680147447c9b2891f216a74d4a8` |
+| Probe | PN1.30 build 12 | [`APP_LPM-10RX_PN1.30-spence12-update.bin`](spentek/firmware/probe/APP_LPM-10RX_PN1.30-spence12-update.bin) | `f171e03961314466d640b4900534e5ba240d294183f32093a6ffe8a455039b9a` |
 
-Both are emulator-tested and **not yet confirmed on hardware**. The last hardware-confirmed builds are
-`LPM-10A-TX_PN2.35C-settings.bin` and `APP_LPM-10RX_PN1.30-spence4-update.bin`, in the same folders.
+Both have been flashed and used on the author's own units. That is one tester and one probe, so it
+is not a guarantee for yours.
 Read the disclaimer at the top of this page before going further.
 
 ### How to apply it (Linux)
@@ -327,7 +334,7 @@ chmod +x tools/lpmflash.py tools/fatpush.py
 ```
 (cd firmware && sha256sum -c SHA256SUMS)
 tools/lpmflash.py check firmware/tester/LPM-10A-TX_PN2.35F-space.bin
-tools/lpmflash.py check firmware/probe/APP_LPM-10RX_PN1.30-spence10-update.bin
+tools/lpmflash.py check firmware/probe/APP_LPM-10RX_PN1.30-spence12-update.bin
 ```
 
 Every line must say `OK` or `a valid ... update image`. Stop if one does not.
@@ -356,7 +363,7 @@ If the tester hangs or shows nothing, press its reset button and repeat from ste
 4. Run:
 
 ```
-sudo tools/lpmflash.py rx firmware/probe/APP_LPM-10RX_PN1.30-spence10-update.bin
+sudo tools/lpmflash.py rx firmware/probe/APP_LPM-10RX_PN1.30-spence12-update.bin
 ```
 
 5. Type `yes` when asked. The drive disappearing is the success signal. Unplug and power on: you
